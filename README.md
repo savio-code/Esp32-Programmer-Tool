@@ -68,7 +68,7 @@ Protect your device from unauthorized access by permanently disabling debug inte
 | **UART Flash Encryption** | Additional encryption layer protection |
 | **Cache & Console Debug** | Further security hardening |
 
-
+<br>
 > ⚠️ **Warning**: These fuses are **one-time programmable (OTP)**, making them irreversible. Perfect for production-ready devices.
 <br>
 
