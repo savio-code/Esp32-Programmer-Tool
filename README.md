@@ -66,8 +66,8 @@ Protect your device from unauthorized access by permanently disabling debug inte
 
 
 > ⚠️ **Warning**: These fuses are **one-time programmable (OTP)**, making them irreversible. Perfect for production-ready devices.
+<br>
 
-<br> 
 ### 📦 Universal Flashing
 
 Supports all standard ESP32 firmware components in one seamless operation:
