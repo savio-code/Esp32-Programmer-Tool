@@ -31,7 +31,7 @@
 - 🛡️ **Platform independence** - Works with PlatformIO, Arduino, and any `.bin` file
 
 ---
-<br>
+<br><br>
 ## 🚀 Key Capabilities
 
 ### 🔐 Secure Firmware Protection
