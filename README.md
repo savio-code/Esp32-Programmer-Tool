@@ -67,8 +67,9 @@ Protect your device from unauthorized access by permanently disabling debug inte
 | **JTAG Debugging** | Blocks external debugging attempts |
 | **UART Flash Encryption** | Additional encryption layer protection |
 | **Cache & Console Debug** | Further security hardening |
+<br>
 
-<br><br>
+
 > ⚠️ **Warning**: These fuses are **one-time programmable (OTP)**, making them irreversible. Perfect for production-ready devices.
 <br>
 
