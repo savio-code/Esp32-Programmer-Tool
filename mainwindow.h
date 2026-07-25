@@ -86,6 +86,8 @@ private:
     QString getFlashFreq();
     QString getFlashSize();
     void resetESP32();
+    void checkAndInstallDependencies();
+    void installEspressifTools();
 
     // Tabs
     QTabWidget *mainTabs;
@@ -188,6 +190,7 @@ private:
     bool commandQueueRunning;
     bool keyBurnSkipped;
     bool isBurningFuses;
+    bool dependenciesChecked;
     int flashRetryCount;
     const int MAX_FLASH_RETRIES = 3;
     QStringList pendingEncryptionSteps;

@@ -34,6 +34,7 @@ MainWindow::MainWindow(QWidget *parent)
     , commandQueueRunning(false)
     , keyBurnSkipped(false)
     , isBurningFuses(false)
+    , dependenciesChecked(false)  // Add this
     , fuseBurnIndex(0)
     , flashRetryCount(0)
     , encryptionStepIndex(0)
@@ -62,6 +63,9 @@ MainWindow::MainWindow(QWidget *parent)
     updateStatus("Ready");
     appendLog("Application started. Waiting for ESP32...", "gray");
     updateFlashButton();
+
+    // Check dependencies after UI is ready
+    QTimer::singleShot(1000, this, &MainWindow::checkAndInstallDependencies);
 }
 
 MainWindow::~MainWindow()
@@ -129,6 +133,17 @@ void MainWindow::setupUI()
     portComboBox = new QComboBox();
     portComboBox->setMinimumWidth(150);
     portLayout->addWidget(portComboBox);
+
+    statusLabel = new QLabel("Ready");
+    statusBar()->addWidget(statusLabel);
+
+    // ========== Add Check Dependencies Button ==========
+    QPushButton *checkDepsBtn = new QPushButton("🔍 Check Dependencies");
+    checkDepsBtn->setFixedWidth(150);
+    checkDepsBtn->setStyleSheet("QPushButton { background-color: #17a2b8; font-weight: bold; font-size: 10px; padding: 2px 8px; }");
+    connect(checkDepsBtn, &QPushButton::clicked, this, &MainWindow::checkAndInstallDependencies);
+    statusBar()->addPermanentWidget(checkDepsBtn);
+
 
     // Refresh Button
     QPushButton *refreshBtn = new QPushButton("🔄 Refresh");
@@ -739,6 +754,137 @@ void MainWindow::setupUI()
             font-size: 11px;
         }
     )");
+}
+
+void MainWindow::checkAndInstallDependencies()
+{
+    appendLog("========================================", "gray");
+    appendLog("🔍 Checking Python and Espressif tools...", "gray");
+    appendLog("========================================", "gray");
+
+    // Check Python
+    QString python = getPythonPath();
+    if (python.isEmpty()) {
+        appendLog("❌ Python not found!", "red");
+        appendLog("💡 Please install Python 3.8+ from:", "yellow");
+        appendLog("   https://www.python.org/downloads/", "gray");
+        appendLog("   Make sure to check 'Add Python to PATH' during installation.", "gray");
+        QMessageBox::warning(this, "Python Not Found",
+                             "Python is not installed or not in PATH.\n\n"
+                             "Please install Python 3.8+ from:\n"
+                             "https://www.python.org/downloads/\n\n"
+                             "Make sure to check 'Add Python to PATH' during installation.");
+        return;
+    }
+    appendLog("✅ Python found: " + python, "green");
+
+    // Check esptool (which includes espsecure and espefuse)
+    if (!checkModuleAvailable("esptool")) {
+        appendLog("❌ esptool not found!", "red");
+        appendLog("💡 Please install Espressif tools:", "yellow");
+        appendLog("   pip install esptool", "gray");
+        appendLog("   (This includes espsecure and espefuse)", "gray");
+
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this,
+            "Missing Dependencies",
+            "esptool is not installed.\n\n"
+            "This tool requires Espressif's Python tools.\n\n"
+            "Would you like to install it now?\n\n"
+            "Command: pip install esptool",
+            QMessageBox::Yes | QMessageBox::No
+            );
+
+        if (reply == QMessageBox::Yes) {
+            installEspressifTools();
+        }
+        return;
+    }
+    appendLog("✅ esptool found (includes espsecure and espefuse)", "green");
+
+    dependenciesChecked = true;
+    appendLog("========================================", "green");
+    appendLog("✅ Dependency check complete", "green");
+    appendLog("========================================", "gray");
+}
+
+void MainWindow::installEspressifTools()
+{
+    appendLog("📦 Installing esptool (includes espsecure and espefuse)...", "gray");
+    appendLog("Running: pip install esptool", "gray");
+
+    QString python = getPythonPath();
+    if (python.isEmpty()) {
+        appendLog("❌ Python not found!", "red");
+        return;
+    }
+
+    QProcess *pipProcess = new QProcess(this);
+    if (!pipProcess) {
+        appendLog("❌ Failed to create process!", "red");
+        return;
+    }
+
+    QStringList args;
+    args << "-m" << "pip" << "install" << "esptool";
+
+    connect(pipProcess, &QProcess::readyReadStandardOutput, [this, pipProcess]() {
+        if (!pipProcess) return;
+        QString output = pipProcess->readAllStandardOutput();
+        if (!output.isEmpty()) {
+            appendLog(output, "gray");
+        }
+    });
+
+    connect(pipProcess, &QProcess::readyReadStandardError, [this, pipProcess]() {
+        if (!pipProcess) return;
+        QString error = pipProcess->readAllStandardError();
+        if (!error.isEmpty()) {
+            appendLog(error, "yellow");
+        }
+    });
+
+    connect(pipProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            [this, pipProcess](int exitCode, QProcess::ExitStatus status) {
+                if (!pipProcess) return;
+
+                if (exitCode == 0 && status == QProcess::NormalExit) {
+                    appendLog("✅ esptool installed successfully!", "green");
+                    appendLog("   (Includes espsecure and espefuse)", "gray");
+                    dependenciesChecked = true;
+
+                    QMessageBox::information(this, "Installation Complete",
+                                             "esptool has been installed successfully!\n\n"
+                                             "This includes:\n"
+                                             "• esptool.py\n"
+                                             "• espsecure.py\n"
+                                             "• espefuse.py\n\n"
+                                             "You can now use the ESP32 Flasher.");
+
+                    // ===== REFRESH PORTS AFTER INSTALLATION =====
+                    appendLog("🔄 Refreshing ports to detect ESP32...", "gray");
+                    onRefreshPorts();
+
+                } else {
+                    appendLog("❌ Installation failed!", "red");
+                    appendLog("💡 Please install manually:", "yellow");
+                    appendLog("   pip install esptool", "gray");
+                    QMessageBox::warning(this, "Installation Failed",
+                                         "Failed to install esptool.\n\n"
+                                         "Please install it manually:\n"
+                                         "  pip install esptool\n\n"
+                                         "(This includes espsecure and espefuse)");
+                }
+                pipProcess->deleteLater();
+            });
+
+    pipProcess->start(python, args);
+
+    if (!pipProcess->waitForStarted(3000)) {
+        appendLog("❌ Failed to start pip installation!", "red");
+        appendLog("💡 Please install manually: pip install esptool", "yellow");
+        pipProcess->deleteLater();
+    }
 }
 
 void MainWindow::populateBaudRates()
@@ -1457,13 +1603,14 @@ void MainWindow::onFlash()
                 this,
                 "Encryption Setup Required",
                 "Flash encryption is not configured on this ESP32.\n\n"
-                "The application will now perform a 5-step setup:\n"
+                "The application will now perform a 4-step setup:\n"
                 "1. Burn encryption key to eFuses (IRREVERSIBLE!)\n"
                 "2. Burn FLASH_CRYPT_CONFIG to 0xF (IRREVERSIBLE!)\n"
                 "3. Burn FLASH_CRYPT_CNT to 1 (IRREVERSIBLE!)\n"
-                "4. Encrypt your firmware with the key\n"
-                "5. Flash the encrypted firmware\n\n"
-                "⚠️ WARNING: This is a ONE-TIME operation!\n"
+                "4. Flash your firmware with encryption\n"
+                "   (The chip encrypts the firmware during write using the burned key)\n\n"
+                "⚠️ WARNING: Steps 1-3 are a ONE-TIME operation!\n"
+                "After burning, encryption is PERMANENT and cannot be undone.\n\n"
                 "Keep your key file safe - losing it will brick the device!\n\n"
                 "Do you want to proceed?",
                 QMessageBox::Yes | QMessageBox::No
