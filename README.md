@@ -30,7 +30,7 @@
 ---
 
 ## 🚀 Key Capabilities
-
+<br> 
 
 ### 🔐 Secure Firmware Protection
 
@@ -40,7 +40,7 @@ The application leverages the ESP32's built-in hardware encryption engine to pro
 
 **Even if someone physically reads the flash memory, they cannot extract your source code or proprietary algorithms without the original key.**
 
-
+<br> 
 ### 🔑 User-Controlled Encryption Keys
 
 Unlike systems where keys are auto-generated and stored on the chip (unrecoverable), this tool allows you to **generate and control your own encryption keys**. You keep a copy of the key file on your PC, which means:
@@ -51,6 +51,7 @@ Unlike systems where keys are auto-generated and stored on the chip (unrecoverab
 
 ![Key Management](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image1.png)
 
+<br> 
 ### 🔒 Security Fuse Management
 
 Protect your device from unauthorized access by permanently disabling debug interfaces:
@@ -65,6 +66,7 @@ Protect your device from unauthorized access by permanently disabling debug inte
 
 > ⚠️ **Warning**: These fuses are **one-time programmable (OTP)**, making them irreversible. Perfect for production-ready devices.
 
+<br> 
 ### 📦 Universal Flashing
 
 Supports all standard ESP32 firmware components in one seamless operation:
