@@ -2,8 +2,6 @@
 
 <div align="center">
 
-![ESP32 Flasher Logo](images/logo.png)
-
 **A comprehensive desktop application for programming ESP32 devices with hardware-based flash encryption**
 
 [![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/savio-code/esp32-flasher)
@@ -33,6 +31,7 @@
 
 ## 🚀 Key Capabilities
 
+
 ### 🔐 Secure Firmware Protection
 
 The application leverages the ESP32's built-in hardware encryption engine to protect your intellectual property. By burning a unique encryption key into the chip's **eFuses (one-time programmable memory)**, your firmware becomes permanently encrypted on the device.
@@ -40,6 +39,7 @@ The application leverages the ESP32's built-in hardware encryption engine to pro
 ![Encryption Process](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image2.png)
 
 **Even if someone physically reads the flash memory, they cannot extract your source code or proprietary algorithms without the original key.**
+
 
 ### 🔑 User-Controlled Encryption Keys
 
