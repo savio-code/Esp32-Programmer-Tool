@@ -37,7 +37,7 @@
 
 The application leverages the ESP32's built-in hardware encryption engine to protect your intellectual property. By burning a unique encryption key into the chip's **eFuses (one-time programmable memory)**, your firmware becomes permanently encrypted on the device.
 
-![Encryption Process](images/encryption_process.png)
+![Encryption Process](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image2.png)
 
 **Even if someone physically reads the flash memory, they cannot extract your source code or proprietary algorithms without the original key.**
 
