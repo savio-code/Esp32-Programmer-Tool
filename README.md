@@ -30,7 +30,7 @@
 - 🛡️ **Platform independence** - Works with PlatformIO, Arduino, and any `.bin` file
 
 ---
-
+<br>
 ## 🚀 Key Capabilities
 
 ### 🔐 Secure Firmware Protection
@@ -40,7 +40,7 @@ The application leverages the ESP32's built-in hardware encryption engine to pro
 ![Encryption Process](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image2.png)
 
 **Even if someone physically reads the flash memory, they cannot extract your source code or proprietary algorithms without the original key.**
-
+<br>
 
 ### 🔑 User-Controlled Encryption Keys
 
@@ -51,7 +51,7 @@ Unlike systems where keys are auto-generated and stored on the chip (unrecoverab
 - ✅ You have full ownership of your security
 
 ![Key Management](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image1.png)
-
+<br>
 
 ### 🔒 Security Fuse Management
 
