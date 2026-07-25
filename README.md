@@ -58,6 +58,7 @@ Unlike systems where keys are auto-generated and stored on the chip (unrecoverab
 <br><br>
 
 ### 🔒 Security Fuse Management
+<br>
 
 Protect your device from unauthorized access by permanently disabling debug interfaces:
 
