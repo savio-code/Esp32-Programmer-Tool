@@ -6,7 +6,7 @@
 
 [![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/savio-code/esp32-flasher)
 [![Qt](https://img.shields.io/badge/Qt-6.11.0-green.svg)](https://www.qt.io/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6.svg)]()
 
 </div>
 
