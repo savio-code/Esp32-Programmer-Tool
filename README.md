@@ -51,7 +51,7 @@ Unlike systems where keys are auto-generated and stored on the chip (unrecoverab
 - ✅ You can decrypt firmware backups if needed
 - ✅ You can re-flash encrypted firmware with confidence
 - ✅ You have full ownership of your security
-- 
+
 <br><br>
 
 ![Key Management](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image1.png)
