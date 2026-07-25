@@ -75,5 +75,6 @@ Protect your device from unauthorized access by permanently disabling debug inte
 ### 📦 Universal Flashing
 
 Supports all standard ESP32 firmware components in one seamless operation:
+<br>
 
 ![About](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image3.png)
