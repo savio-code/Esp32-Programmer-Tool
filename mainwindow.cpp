@@ -571,7 +571,7 @@ void MainWindow::setupUI()
     titleLabel->setAlignment(Qt::AlignCenter);
     aboutLayout->addWidget(titleLabel);
 
-    QLabel *versionLabel = new QLabel("Version 2.0.0");
+    QLabel *versionLabel = new QLabel("Version 1.0");
     versionLabel->setStyleSheet("font-size: 14px; color: #666;");
     versionLabel->setAlignment(Qt::AlignCenter);
     aboutLayout->addWidget(versionLabel);
@@ -655,7 +655,7 @@ void MainWindow::setupUI()
     licenseText->setWordWrap(true);
     licenseLayout->addWidget(licenseText);
 
-    QLabel *licenseCopyright = new QLabel("© 2025 Saviour Ekpe. All rights reserved.");
+    QLabel *licenseCopyright = new QLabel("© 2025 Saviour Ekiko. All rights reserved.");
     licenseCopyright->setStyleSheet("font-size: 11px; color: #888;");
     licenseCopyright->setAlignment(Qt::AlignCenter);
     licenseLayout->addWidget(licenseCopyright);
