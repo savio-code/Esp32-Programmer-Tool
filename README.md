@@ -18,7 +18,7 @@
 
 **ESP32 Flasher & Encryption Manager** is a comprehensive desktop application that simplifies the process of programming ESP32 devices while providing robust firmware protection through hardware-based flash encryption. Whether you're a hobbyist developing IoT devices or a professional deploying products in the field, this tool gives you complete control over your ESP32's security.
 
-![Main Interface](images/main_interface.png)
+![Main Interface]([images/main_interface.png](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image1.png))
 
 ### ✨ Features at a Glance
 
