@@ -1,4 +1,4 @@
-# 🔐 ESP32 Flasher & Encryption Manager
+# 🔐 ESP32 Firmware Encryption & Deployment Tool
 
 <div align="center">
 
