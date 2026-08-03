@@ -46,6 +46,8 @@ The application leverages the ESP32's built-in hardware encryption engine to pro
 
 **It does not support Secure Boot V2 (RSA-3072/ECDSA) key generation or burning.**
 
+<br><br>
+
 ![Encryption Process](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image1.png)
 
 **Even if someone physically reads the flash memory, they cannot extract your source code or proprietary algorithms without the original key.**
