@@ -41,7 +41,9 @@ The application leverages the ESP32's built-in hardware encryption engine to pro
 <br><br>
 
 **NOTE**
+
 **The tool supports Flash Encryption (AES-256) for all ESP32 chips.**
+
 **It does not support Secure Boot V2 (RSA-3072/ECDSA) key generation or burning.**
 
 ![Encryption Process](https://raw.githubusercontent.com/savio-code/Esp32-Programmer-Tool/refs/heads/main/images/image1.png)
