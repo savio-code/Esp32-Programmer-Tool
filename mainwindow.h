@@ -37,6 +37,7 @@ private slots:
     void onEraseFlash();
     void onClearAll();
     void onBurnSecurityFuses();
+    void burnSecurityFuses();
     void onReadFuseStatus();
     void onRefreshPorts();
 
@@ -62,6 +63,7 @@ private:
     void loadSettings();
     void saveSettings();
     void updateFlashButton();
+    void onUpdateFlashButtonClicked();
     QString formatOffset(quint32 offset);
     void setupAutoSave();
     void populateBaudRates();
@@ -181,6 +183,7 @@ private:
     // State
     bool isFlashing;
     bool isSettingLoaded;
+    bool isFlashMode;
     bool isEncryptionConfigured;
     bool encryptionSetupInProgress;
     bool isCheckingEncryption;
@@ -198,6 +201,7 @@ private:
     int commandQueueIndex;
     QStringList commandQueue;
     QString encryptedFirmwarePath;
+    bool isEncryptionDetectionParsed;
 
     QProcess *esptoolProcess;
     SerialMonitor *serialMonitor;

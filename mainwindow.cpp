@@ -571,7 +571,7 @@ void MainWindow::setupUI()
     titleLabel->setAlignment(Qt::AlignCenter);
     aboutLayout->addWidget(titleLabel);
 
-    QLabel *versionLabel = new QLabel("Version 1.0");
+    QLabel *versionLabel = new QLabel("Version 1.1");
     versionLabel->setStyleSheet("font-size: 14px; color: #666;");
     versionLabel->setAlignment(Qt::AlignCenter);
     aboutLayout->addWidget(versionLabel);
@@ -920,8 +920,8 @@ void MainWindow::createConnections()
             this, &MainWindow::onFlash);
     connect(eraseFlashBtn, &QPushButton::clicked,
             this, &MainWindow::onEraseFlash);
-    connect(encryptFlashCheckBox, &QCheckBox::stateChanged,
-            this, &MainWindow::updateFlashButton);
+    connect(encryptFlashCheckBox, &QCheckBox::clicked,
+            this, &MainWindow::onUpdateFlashButtonClicked);
 
     connect(bootloaderFileEdit, &QLineEdit::textChanged,
             this, &MainWindow::updateFlashButton);
@@ -1036,6 +1036,23 @@ void MainWindow::updateFlashButton()
     flashBtn->setEnabled(enabled);
 }
 
+void MainWindow::onUpdateFlashButtonClicked()
+{
+    bool keyValid = true;
+    if (encryptFlashCheckBox->isChecked()) {
+        keyValid = !selectedKeyPath.isEmpty() && QFile::exists(selectedKeyPath);
+    }
+
+    if(!keyValid) {
+        encryptFlashCheckBox->setChecked(false);
+        appendLog("❌ Error: Key File path is invalid!", "red");
+        QMessageBox::warning(this, "Error", "Please select or generate a valid encryption key file!");
+        return;
+    }
+
+    updateFlashButton();
+}
+
 
 QString MainWindow::formatOffset(quint32 offset)
 {
@@ -1117,9 +1134,11 @@ void MainWindow::parseEncryptionStatus(const QString &output)
     bool keyProgrammed = false;
     bool configSet = false;
     bool cryptCntSet = false;
+    isEncryptionDetectionParsed = false;
 
     if (output.contains("BLOCK1 (BLOCK1)") &&
         output.contains("Flash encryption key")) {
+        isEncryptionDetectionParsed = true;
         QRegularExpression keyRegex("BLOCK1.*?=\\s*([?a-fA-F0-9 ]+)");
         QRegularExpressionMatch match = keyRegex.match(output);
         if (match.hasMatch()) {
@@ -1175,19 +1194,22 @@ void MainWindow::parseEncryptionStatus(const QString &output)
         eraseFlashBtn->setToolTip("Erase flash (encryption is permanent)");
         eraseFlashBtn->setText("🗑️ Erase Flash");
     } else {
-        isEncryptionConfigured = false;
-        isFirstEncryptionCheck = false;
-        updateEncryptionStatusLabel(false);
-        appendLog("🔓 Flash encryption is DISABLED on this device", "yellow");
-        if (keyProgrammed) {
-            appendLog("ℹ️ Key is burned but encryption is NOT enabled (FLASH_CRYPT_CNT = 0)", "yellow");
-            appendLog("ℹ️ To enable encryption, burn FLASH_CRYPT_CNT to 1", "yellow");
-        } else {
-            appendLog("ℹ️ Encryption can be configured if needed.", "gray");
+        if(isEncryptionDetectionParsed)
+        {
+            isEncryptionConfigured = false;
+            isFirstEncryptionCheck = false;
+            updateEncryptionStatusLabel(false);
+            appendLog("🔓 Flash encryption is DISABLED on this device", "yellow");
+            if (keyProgrammed) {
+                appendLog("ℹ️ Key is burned but encryption is NOT enabled (FLASH_CRYPT_CNT = 0)", "yellow");
+                appendLog("ℹ️ To enable encryption, burn FLASH_CRYPT_CNT to 1", "yellow");
+            } else {
+                appendLog("ℹ️ Encryption can be configured if needed.", "gray");
+            }
+            eraseFlashBtn->setEnabled(true);
+            eraseFlashBtn->setToolTip("Erase flash memory");
+            eraseFlashBtn->setText("🗑️ Erase Flash");
         }
-        eraseFlashBtn->setEnabled(true);
-        eraseFlashBtn->setToolTip("Erase flash memory");
-        eraseFlashBtn->setText("🗑️ Erase Flash");
     }
 }
 
@@ -1334,6 +1356,14 @@ void MainWindow::executeNextCommand()
         runModuleCommand("esptool", args);
     } else if (command == "summary") {
         appendLog("Checking flash encryption status...", "gray");
+
+        if(isFlashMode)
+        {
+            pendingEncryptionSteps.clear();
+            pendingEncryptionSteps << "pre_flash_check";
+            isFlashMode = false;
+        }
+
         QStringList args;
         args << "--port" << portComboBox->currentText();
         args << "summary";
@@ -1588,24 +1618,18 @@ void MainWindow::onFlash()
                                  "Please select a valid encryption key file!");
             return;
         }
-
-        // ALWAYS check encryption status before flashing when encryption is enabled
-        appendLog("🔍 Checking current encryption status...", "gray");
-
-        pendingEncryptionSteps.clear();
-        pendingEncryptionSteps << "pre_flash_check";
-
-        QStringList args;
-        args << "--port" << portComboBox->currentText();
-        args << "summary";
-        pendingModule = "espefuse_summary";
-        pendingArgs = args;
-        runModuleCommand("espefuse", args);
-        return;
     }
 
-    // If not encrypting, just flash normally
-    flashWithoutEncryption();
+    appendLog("🔍 Checking current encryption status...", "gray");
+
+    isFlashMode = true;
+
+    commandQueue.clear();
+    commandQueue << "flash-id" << "summary";
+    commandQueueIndex = 0;
+    commandQueueRunning = true;
+
+    executeNextCommand();
 }
 
 void MainWindow::performEncryptionSetup()
@@ -2218,6 +2242,11 @@ void MainWindow::onBurnSecurityFuses()
         return;
     }
 
+    burnSecurityFuses();
+}
+
+void MainWindow::burnSecurityFuses()
+{
     fuseBurnQueue.clear();
     if (uartDownloadDisCheckBox->isChecked()) fuseBurnQueue << "UART_DOWNLOAD_DIS";
     if (jtagDisableCheckBox->isChecked()) fuseBurnQueue << "JTAG_DISABLE";
@@ -2432,8 +2461,6 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
     bool wasErase = (pendingModule == "esptool" && pendingArgs.contains("erase-flash"));
     bool wasKeyBurn = (pendingModule == "espefuse" && pendingArgs.contains("burn-key"));
     bool wasKeyGen = (pendingModule == "espsecure" && pendingArgs.contains("generate-flash-encryption-key"));
-    bool wasBurnConfig = (pendingModule == "espefuse" && pendingArgs.contains("burn-efuse") && pendingArgs.contains("FLASH_CRYPT_CONFIG"));
-    bool wasBurnCnt = (pendingModule == "espefuse" && pendingArgs.contains("burn-efuse") && pendingArgs.contains("FLASH_CRYPT_CNT"));
     bool wasEncrypt = (pendingModule == "espsecure" && pendingArgs.contains("encrypt-flash-data"));
     bool wasFlashEncrypted = (pendingModule == "esptool" && !pendingArgs.contains("erase-flash") && !pendingArgs.contains("flash-id") && pendingArgs.contains(encryptedFirmwarePath));
     bool wasNormalFlash = (pendingModule == "esptool" && !pendingArgs.contains("erase-flash") && !pendingArgs.contains("flash-id") && !pendingArgs.contains(encryptedFirmwarePath) && pendingArgs.contains("write-flash"));
@@ -2450,48 +2477,57 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
     bool wasPreFlashCheck = wasEncryptionCheck &&
                             pendingEncryptionSteps.contains("pre_flash_check");
 
-    if (wasPreFlashCheck) {
-        pendingEncryptionSteps.removeAll("pre_flash_check");
-        isFirstEncryptionCheck = false;
+    if(wasPreFlashCheck)
+    {
+        if(!encryptFlashCheckBox->isChecked())
+        {
+            flashWithoutEncryption();
+            return;
+        }
+        else
+        {
+            pendingEncryptionSteps.removeAll("pre_flash_check");
+            isFirstEncryptionCheck = false;
 
-        // Check if encryption is configured
-        if (isEncryptionConfigured) {
-            appendLog("✅ Encryption is configured. Proceeding with encrypted flash.", "green");
-            QTimer::singleShot(300, this, [this]() {
-                flashWithEncryption();
-            });
-        } else {
-            // Show the encryption setup warning dialog
-            appendLog("ℹ️ Encryption is not configured. Showing setup warning...", "yellow");
+            // Check if encryption is configured
+            if (isEncryptionConfigured) {
+                appendLog("✅ Encryption is configured. Proceeding with encrypted flash.", "green");
+                QTimer::singleShot(300, this, [this]() {
+                    flashWithEncryption();
+                });
+            } else {
+                // Show the encryption setup warning dialog
+                appendLog("ℹ️ Encryption is not configured. Showing setup warning...", "yellow");
 
-            QMessageBox::StandardButton reply = QMessageBox::question(
-                this,
-                "Encryption Setup Required",
-                "Flash encryption is not configured on this ESP32.\n\n"
-                "The application will now perform a 4-step setup:\n"
-                "1. Burn encryption key to eFuses (IRREVERSIBLE!)\n"
-                "2. Burn FLASH_CRYPT_CONFIG to 0xF (IRREVERSIBLE!)\n"
-                "3. Burn FLASH_CRYPT_CNT to 1 (IRREVERSIBLE!)\n"
-                "4. Flash your firmware with encryption\n"
-                "   (The chip encrypts the firmware during write using the burned key)\n\n"
-                "⚠️ WARNING: Steps 1-3 are a ONE-TIME operation!\n"
-                "After burning, encryption is PERMANENT and cannot be undone.\n\n"
-                "Keep your key file safe - losing it will brick the device!\n\n"
-                "Do you want to proceed?",
-                QMessageBox::Yes | QMessageBox::No
-                );
+                QMessageBox::StandardButton reply = QMessageBox::question(
+                    this,
+                    "Encryption Setup Required",
+                    "Flash encryption is not configured on this ESP32.\n\n"
+                    "The application will now perform a 4-step setup:\n"
+                    "1. Burn encryption key to eFuses (IRREVERSIBLE!)\n"
+                    "2. Burn FLASH_CRYPT_CONFIG to 0xF (IRREVERSIBLE!)\n"
+                    "3. Burn FLASH_CRYPT_CNT to 1 (IRREVERSIBLE!)\n"
+                    "4. Flash your firmware with encryption\n"
+                    "   (The chip encrypts the firmware during write using the burned key)\n\n"
+                    "⚠️ WARNING: Steps 1-3 are a ONE-TIME operation!\n"
+                    "After burning, encryption is PERMANENT and cannot be undone.\n\n"
+                    "Keep your key file safe - losing it will brick the device!\n\n"
+                    "Do you want to proceed?",
+                    QMessageBox::Yes | QMessageBox::No
+                    );
 
-            if (reply == QMessageBox::Yes) {
-                performEncryptionSetup();
+                if (reply == QMessageBox::Yes) {
+                    performEncryptionSetup();
+                }
+                // If user says No, just return - nothing else to do
             }
-            // If user says No, just return - nothing else to do
-        }
 
-        if (esptoolProcess) {
-            esptoolProcess->deleteLater();
-            esptoolProcess = nullptr;
+            if (esptoolProcess) {
+                esptoolProcess->deleteLater();
+                esptoolProcess = nullptr;
+            }
+            return;
         }
-        return;
     }
 
     // Handle failed flash with retry
@@ -2739,6 +2775,18 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                 appendLog("🔄 Performing soft reset...", "gray");
                 QTimer::singleShot(500, this, [this]() {
                     resetESP32();
+
+
+                    if (uartDownloadDisCheckBox->isChecked() ||
+                        (jtagDisableCheckBox->isChecked() ||
+                         disableDlEncryptCheckBox->isChecked()) ||
+                        disableDlDecryptCheckBox->isChecked() ||
+                        disableCacheCheckBox->isChecked() ||
+                        consoleDebugDisableCheckBox->isChecked()) {
+
+                        burnSecurityFuses();
+                    }
+
                     appendLog("✅ Reset complete. ESP32 should boot normally.", "green");
                 });
             }
