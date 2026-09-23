@@ -42,7 +42,7 @@ The application leverages the ESP32's built-in hardware encryption engine to pro
 
 **NOTE**
 
-**The tool supports Flash Encryption (AES-256) for all ESP32 chips.**
+**This tool supports Flash Encryption (AES-256) for all ESP32 chips.**
 
 **It does not support Secure Boot V2 (RSA-3072/ECDSA) key generation or burning.**
 
