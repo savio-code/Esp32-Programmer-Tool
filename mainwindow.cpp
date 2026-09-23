@@ -2768,15 +2768,13 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
         }
 
         if (wasNormalFlash) {
-            appendLog("ℹ️ Flash completed.", "gray");
+
             flashRetryCount = 0;
 
             if (isEncryptionConfigured) {
-                appendLog("🔄 Performing soft reset...", "gray");
+                appendLog("ℹ️ Flash completed.", "gray");
+
                 QTimer::singleShot(500, this, [this]() {
-                    resetESP32();
-
-
                     if (uartDownloadDisCheckBox->isChecked() ||
                         (jtagDisableCheckBox->isChecked() ||
                          disableDlEncryptCheckBox->isChecked()) ||
@@ -2786,9 +2784,8 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
 
                         burnSecurityFuses();
                     }
-
-                    appendLog("✅ Reset complete. ESP32 should boot normally.", "green");
                 });
+
             }
         }
 
