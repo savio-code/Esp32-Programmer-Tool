@@ -1411,7 +1411,7 @@ void MainWindow::onSelectKey()
     appendLog(QString("Selected key: %1").arg(fileName), "green");
 
     if (fileName.contains(' ')) {
-        appendLog("ℹ️ Key path has spaces — a temp copy will be used when burning.", "yellow");
+        // appendLog("ℹ️ Key path has spaces — a temp copy will be used when burning.", "yellow");
     }
 
     updateFlashButton();
@@ -3109,7 +3109,7 @@ void MainWindow::cleanupEncryptedFile()
             QFile::setPermissions(path,
                                   QFile::ReadOwner | QFile::WriteOwner | QFile::ReadUser | QFile::WriteUser);
             if (QFile::remove(path)) {
-                appendLog("Cleaned up: " + QFileInfo(path).fileName(), "gray");
+                // appendLog("Cleaned up: " + QFileInfo(path).fileName(), "gray");
             }
         }
         path.clear();
@@ -3143,9 +3143,9 @@ void MainWindow::cleanupTempDirectory()
 
     if (dir.rmdir(tempDir)) {
         if (removed > 0) {
-            appendLog(QString("🧹 Cleaned up %1 temp file(s)").arg(removed), "gray");
+            // appendLog(QString("🧹 Cleaned up %1 temp file(s)").arg(removed), "gray");
         }
     } else if (removed > 0) {
-        appendLog(QString("🧹 Removed %1 temp file(s); directory not empty").arg(removed), "gray");
+        // appendLog(QString("🧹 Removed %1 temp file(s); directory not empty").arg(removed), "gray");
     }
 }
