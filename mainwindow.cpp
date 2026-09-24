@@ -20,6 +20,9 @@
 #include <QStatusBar>
 #include <QSpinBox>
 #include <QTimer>
+#include <QTextCursor>
+#include <QTextCharFormat>
+#include <QColor>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -29,12 +32,17 @@ MainWindow::MainWindow(QWidget *parent)
     , encryptionSetupInProgress(false)
     , isCheckingEncryption(false)
     , isFirstEncryptionCheck(true)
+    , isEncryptionDetectionParsed(false)
     , chipInfoReceived(false)
     , flashSizeReceived(false)
     , commandQueueRunning(false)
     , keyBurnSkipped(false)
     , isBurningFuses(false)
-    , dependenciesChecked(false)  // Add this
+    , dependenciesChecked(false)
+    , isFlashMode(false)
+    , flashingEncryptedImages(false)
+    , handlingKeyBurned(false)
+    , pendingEncryptionSuccessDialog(false)
     , fuseBurnIndex(0)
     , flashRetryCount(0)
     , encryptionStepIndex(0)
@@ -64,7 +72,11 @@ MainWindow::MainWindow(QWidget *parent)
     appendLog("Application started. Waiting for ESP32...", "gray");
     updateFlashButton();
 
-    // Check dependencies after UI is ready
+    // Clean up any temp leftovers from a previous crash
+    QTimer::singleShot(0, this, [this]() {
+        cleanupTempDirectory();
+    });
+
     QTimer::singleShot(1000, this, &MainWindow::checkAndInstallDependencies);
 }
 
@@ -72,6 +84,7 @@ MainWindow::~MainWindow()
 {
     saveSettings();
     cleanupEncryptedFile();
+    cleanupTempDirectory();
 
     if (encryptionCheckTimer) {
         encryptionCheckTimer->stop();
@@ -137,15 +150,12 @@ void MainWindow::setupUI()
     statusLabel = new QLabel("Ready");
     statusBar()->addWidget(statusLabel);
 
-    // ========== Add Check Dependencies Button ==========
     QPushButton *checkDepsBtn = new QPushButton("🔍 Check Dependencies");
     checkDepsBtn->setFixedWidth(150);
     checkDepsBtn->setStyleSheet("QPushButton { background-color: #17a2b8; font-weight: bold; font-size: 10px; padding: 2px 8px; }");
     connect(checkDepsBtn, &QPushButton::clicked, this, &MainWindow::checkAndInstallDependencies);
     statusBar()->addPermanentWidget(checkDepsBtn);
 
-
-    // Refresh Button
     QPushButton *refreshBtn = new QPushButton("🔄 Refresh");
     refreshBtn->setFixedWidth(90);
     refreshBtn->setToolTip("Refresh port list and chip information");
@@ -215,7 +225,6 @@ void MainWindow::setupUI()
     filesLayout->setSpacing(3);
     filesLayout->setContentsMargins(6, 8, 6, 4);
 
-    // Row 1: Bootloader
     selectBootloaderBtn = new QPushButton("Bootloader");
     selectBootloaderBtn->setFixedWidth(90);
     bootloaderFileEdit = new QLineEdit();
@@ -236,7 +245,6 @@ void MainWindow::setupUI()
     filesLayout->addWidget(new QLabel("Offset:"), 0, 2);
     filesLayout->addWidget(bootloaderOffsetSpin, 0, 3);
 
-    // Row 2: Partition Table
     selectPartitionBtn = new QPushButton("Partition");
     selectPartitionBtn->setFixedWidth(90);
     partitionFileEdit = new QLineEdit();
@@ -257,7 +265,6 @@ void MainWindow::setupUI()
     filesLayout->addWidget(new QLabel("Offset:"), 1, 2);
     filesLayout->addWidget(partitionOffsetSpin, 1, 3);
 
-    // Row 3: Firmware
     selectFirmwareBtn = new QPushButton("Firmware");
     selectFirmwareBtn->setFixedWidth(90);
     firmwareFileEdit = new QLineEdit();
@@ -284,7 +291,6 @@ void MainWindow::setupUI()
     QHBoxLayout *settingsLayout = new QHBoxLayout();
     settingsLayout->setSpacing(8);
 
-    // Baud Rate
     QGroupBox *baudGroup = new QGroupBox("Baud Rate");
     baudGroup->setStyleSheet("QGroupBox { font-weight: bold; margin-top: 4px; padding-top: 6px; border: 1px solid #cccccc; border-radius: 4px; }");
     QHBoxLayout *baudLayout = new QHBoxLayout(baudGroup);
@@ -297,7 +303,6 @@ void MainWindow::setupUI()
     baudLayout->addWidget(baudRateComboBox);
     settingsLayout->addWidget(baudGroup);
 
-    // Options
     QGroupBox *optionsGroup = new QGroupBox("Options");
     optionsGroup->setStyleSheet("QGroupBox { font-weight: bold; margin-top: 4px; padding-top: 6px; border: 1px solid #cccccc; border-radius: 4px; }");
     QHBoxLayout *optionsLayout = new QHBoxLayout(optionsGroup);
@@ -354,7 +359,6 @@ void MainWindow::setupUI()
     logLayout->setSpacing(2);
     logLayout->setContentsMargins(4, 6, 4, 4);
 
-    // Log toolbar with clear button
     QHBoxLayout *logToolbar = new QHBoxLayout();
     logToolbar->setSpacing(4);
 
@@ -392,7 +396,6 @@ void MainWindow::setupUI()
     fuseLayout->setSpacing(6);
     fuseLayout->setContentsMargins(10, 10, 10, 10);
 
-    // Fuse Status Section
     QGroupBox *statusGroup = new QGroupBox("Fuse Status");
     statusGroup->setStyleSheet("QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 10px; }");
     QGridLayout *statusLayout = new QGridLayout(statusGroup);
@@ -458,7 +461,6 @@ void MainWindow::setupUI()
 
     fuseLayout->addWidget(statusGroup);
 
-    // Fuse Burning Section
     fuseOptionsGroup = new QGroupBox("Burn Security Fuses (IRREVERSIBLE!)");
     fuseOptionsGroup->setStyleSheet("QGroupBox { font-weight: bold; color: #dc3545; margin-top: 8px; padding-top: 10px; }");
     QVBoxLayout *fuseOptionsLayout = new QVBoxLayout(fuseOptionsGroup);
@@ -532,7 +534,6 @@ void MainWindow::setupUI()
 
     fuseLayout->addWidget(fuseOptionsGroup);
 
-    // Fuse Info Section
     QGroupBox *infoGroup = new QGroupBox("Fuse Information");
     infoGroup->setStyleSheet("QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 10px; }");
     QVBoxLayout *infoLayout = new QVBoxLayout(infoGroup);
@@ -565,7 +566,6 @@ void MainWindow::setupUI()
     aboutLayout->setSpacing(12);
     aboutLayout->setContentsMargins(20, 20, 20, 20);
 
-    // Header
     QLabel *titleLabel = new QLabel("ESP32 Flasher & Encryption Manager");
     titleLabel->setStyleSheet("font-size: 20px; font-weight: bold; color: #4a90d9;");
     titleLabel->setAlignment(Qt::AlignCenter);
@@ -576,13 +576,11 @@ void MainWindow::setupUI()
     versionLabel->setAlignment(Qt::AlignCenter);
     aboutLayout->addWidget(versionLabel);
 
-    // Separator
     QFrame *line = new QFrame();
     line->setFrameShape(QFrame::HLine);
     line->setFrameShadow(QFrame::Sunken);
     aboutLayout->addWidget(line);
 
-    // Description
     QTextEdit *descText = new QTextEdit();
     descText->setReadOnly(true);
     descText->setHtml(R"(
@@ -616,7 +614,6 @@ void MainWindow::setupUI()
     descText->setStyleSheet("QTextEdit { background-color: #f8f9fa; border: none; }");
     aboutLayout->addWidget(descText);
 
-    // Author Information
     QGroupBox *authorGroup = new QGroupBox("Author Information");
     authorGroup->setStyleSheet("QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 10px; }");
     QVBoxLayout *authorLayout = new QVBoxLayout(authorGroup);
@@ -638,10 +635,8 @@ void MainWindow::setupUI()
     authorGithub->setToolTip("Open GitHub profile in browser");
     authorLayout->addWidget(authorGithub);
 
-
     aboutLayout->addWidget(authorGroup);
 
-    // License Information
     QGroupBox *licenseGroup = new QGroupBox("License");
     licenseGroup->setStyleSheet("QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 10px; }");
     QVBoxLayout *licenseLayout = new QVBoxLayout(licenseGroup);
@@ -655,14 +650,13 @@ void MainWindow::setupUI()
     licenseText->setWordWrap(true);
     licenseLayout->addWidget(licenseText);
 
-    QLabel *licenseCopyright = new QLabel("© 2025 Saviour Ekiko. All rights reserved.");
+    QLabel *licenseCopyright = new QLabel("© 2026 Saviour Ekiko. All rights reserved.");
     licenseCopyright->setStyleSheet("font-size: 11px; color: #888;");
     licenseCopyright->setAlignment(Qt::AlignCenter);
     licenseLayout->addWidget(licenseCopyright);
 
     aboutLayout->addWidget(licenseGroup);
 
-    // Credits
     QGroupBox *creditsGroup = new QGroupBox("Credits");
     creditsGroup->setStyleSheet("QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 10px; }");
     QVBoxLayout *creditsLayout = new QVBoxLayout(creditsGroup);
@@ -680,14 +674,11 @@ void MainWindow::setupUI()
 
     aboutLayout->addWidget(creditsGroup);
 
-    // Spacer to push everything up
     aboutLayout->addStretch();
 
-    // ========== Status Bar ==========
     statusLabel = new QLabel("Ready");
     statusBar()->addWidget(statusLabel);
 
-    // ========== Styles ==========
     setStyleSheet(R"(
         QGroupBox {
             font-weight: bold;
@@ -762,7 +753,6 @@ void MainWindow::checkAndInstallDependencies()
     appendLog("🔍 Checking Python and Espressif tools...", "gray");
     appendLog("========================================", "gray");
 
-    // Check Python
     QString python = getPythonPath();
     if (python.isEmpty()) {
         appendLog("❌ Python not found!", "red");
@@ -778,19 +768,25 @@ void MainWindow::checkAndInstallDependencies()
     }
     appendLog("✅ Python found: " + python, "green");
 
-    // Check esptool (which includes espsecure and espefuse)
-    if (!checkModuleAvailable("esptool")) {
-        appendLog("❌ esptool not found!", "red");
+    bool hasEsptool = checkModuleAvailable("esptool");
+    bool hasEspsecure = checkModuleAvailable("espsecure");
+    bool hasEspefuse = checkModuleAvailable("espefuse");
+
+    if (!hasEsptool || !hasEspsecure || !hasEspefuse) {
+        appendLog("❌ Missing required Espressif tools!", "red");
+        if (!hasEsptool)   appendLog("   • esptool (missing)", "yellow");
+        if (!hasEspsecure) appendLog("   • espsecure (missing)", "yellow");
+        if (!hasEspefuse)  appendLog("   • espefuse (missing)", "yellow");
         appendLog("💡 Please install Espressif tools:", "yellow");
         appendLog("   pip install esptool", "gray");
-        appendLog("   (This includes espsecure and espefuse)", "gray");
+        appendLog("   (esptool includes espsecure and espefuse)", "gray");
 
         QMessageBox::StandardButton reply = QMessageBox::question(
             this,
             "Missing Dependencies",
-            "esptool is not installed.\n\n"
-            "This tool requires Espressif's Python tools.\n\n"
-            "Would you like to install it now?\n\n"
+            "Espressif tools are not fully installed.\n\n"
+            "This tool requires esptool, espsecure, and espefuse.\n\n"
+            "Would you like to install them now?\n\n"
             "Command: pip install esptool",
             QMessageBox::Yes | QMessageBox::No
             );
@@ -800,7 +796,9 @@ void MainWindow::checkAndInstallDependencies()
         }
         return;
     }
-    appendLog("✅ esptool found (includes espsecure and espefuse)", "green");
+    appendLog("✅ esptool found", "green");
+    appendLog("✅ espsecure found", "green");
+    appendLog("✅ espefuse found", "green");
 
     dependenciesChecked = true;
     appendLog("========================================", "green");
@@ -861,7 +859,6 @@ void MainWindow::installEspressifTools()
                                              "• espefuse.py\n\n"
                                              "You can now use the ESP32 Flasher.");
 
-                    // ===== REFRESH PORTS AFTER INSTALLATION =====
                     appendLog("🔄 Refreshing ports to detect ESP32...", "gray");
                     onRefreshPorts();
 
@@ -1061,6 +1058,7 @@ QString MainWindow::formatOffset(quint32 offset)
 
 void MainWindow::updateEncryptionStatusLabel(bool configured, const QString &details)
 {
+    Q_UNUSED(details);
     isEncryptionConfigured = configured;
     if (configured) {
         encryptionStatusLabel->setText("🔒 Encryption: Enabled ✓");
@@ -1080,22 +1078,22 @@ void MainWindow::parseChipInfo(const QString &output)
     QRegularExpression chipRegex("Chip type:\\s*([A-Za-z0-9\\-]+)\\s*\\(revision\\s*([^)]+)\\)");
     QRegularExpressionMatch match = chipRegex.match(output);
     if (match.hasMatch()) {
-        chipModelLabel->setText("Model: " + match.captured(1));
-        chipRevisionLabel->setText("Revision: " + match.captured(2));
+        chipModelLabel->setText("Model:  " + match.captured(1));
+        chipRevisionLabel->setText("Revision:  " + match.captured(2));
     }
 
     QRegularExpression featuresRegex("Features:\\s*([^\r\n]+)");
     match = featuresRegex.match(output);
     if (match.hasMatch()) {
         QString feats = match.captured(1).trimmed();
-        chipFeaturesLabel->setText("Features: " + feats);
-        chipCoresLabel->setText(feats.contains("Dual Core") ? "Cores: 2" : "Cores: 1");
+        chipFeaturesLabel->setText("Features:  " + feats);
+        chipCoresLabel->setText(feats.contains("Dual Core") ? "Cores:  2" : "Cores:  1");
     }
 
     QRegularExpression macRegex("MAC:\\s*([0-9A-Fa-f:]+)");
     match = macRegex.match(output);
     if (match.hasMatch()) {
-        chipMacLabel->setText("MAC Address: " + match.captured(1));
+        chipMacLabel->setText("MAC Address:  " + match.captured(1).toUpper());
     }
 }
 
@@ -1106,7 +1104,7 @@ void MainWindow::parseFlashSize(const QString &output)
     if (match.hasMatch()) {
         flashSizeLabel->setText("Flash Size: " + match.captured(1));
         flashSizeReceived = true;
-        appendLog("✅ Flash size detected: " + match.captured(1), "green");
+        appendLog("✅ Flash size detected:  " + match.captured(1), "green");
         return;
     }
 
@@ -1132,7 +1130,6 @@ void MainWindow::parseEncryptionStatus(const QString &output)
 {
     bool encryptionDetected = false;
     bool keyProgrammed = false;
-    bool configSet = false;
     bool cryptCntSet = false;
     isEncryptionDetectionParsed = false;
 
@@ -1150,17 +1147,6 @@ void MainWindow::parseEncryptionStatus(const QString &output)
         }
     }
 
-    if (output.contains("FLASH_CRYPT_CONFIG")) {
-        QRegularExpression configRegex("FLASH_CRYPT_CONFIG.*?=\\s*(0x[0-9a-fA-F]+)");
-        QRegularExpressionMatch match = configRegex.match(output);
-        if (match.hasMatch()) {
-            QString configValue = match.captured(1);
-            if (configValue != "0x0") {
-                configSet = true;
-            }
-        }
-    }
-
     if (output.contains("FLASH_CRYPT_CNT")) {
         QRegularExpression cntRegex("FLASH_CRYPT_CNT.*?=\\s*(\\d+)");
         QRegularExpressionMatch match = cntRegex.match(output);
@@ -1174,13 +1160,6 @@ void MainWindow::parseEncryptionStatus(const QString &output)
                 appendLog("🔓 FLASH_CRYPT_CNT = 0 (encryption is DISABLED)", "yellow");
                 encryptionDetected = false;
             }
-        }
-    }
-
-    if (output.contains("Flash encryption key is programmed") ||
-        output.contains("FLASH_CRYPT_CNT: 0b")) {
-        if (!cryptCntSet) {
-            encryptionDetected = true;
         }
     }
 
@@ -1386,6 +1365,17 @@ void MainWindow::onGenerateKey()
         return;
     }
 
+    // espsecure.py cannot reliably handle paths with spaces
+    if (fileName.contains(' ')) {
+        appendLog("❌ Key path contains spaces. Please pick a path without spaces.", "red");
+        QMessageBox::warning(this, "Path Contains Spaces",
+                             "The selected path contains spaces.\n\n"
+                             "espsecure.py and espefuse.py cannot reliably handle\n"
+                             "paths with spaces. Please choose a folder without\n"
+                             "spaces (e.g., C:\\ESP32\\keys\\).");
+        return;
+    }
+
     QStringList args;
     args << "generate-flash-encryption-key" << fileName;
 
@@ -1408,15 +1398,22 @@ void MainWindow::onSelectKey()
         "Binary Files (*.bin);;All Files (*)"
         );
 
-    if (!fileName.isEmpty()) {
-        selectedKeyPath = fileName;
-        keyFileEdit->setText(fileName);
-        appendLog(QString("Selected key: %1").arg(fileName), "green");
-    } else {
+    if (fileName.isEmpty()) {
         selectedKeyPath.clear();
         keyFileEdit->clear();
         appendLog("Key selection cleared", "gray");
+        updateFlashButton();
+        return;
     }
+
+    selectedKeyPath = fileName;
+    keyFileEdit->setText(fileName);
+    appendLog(QString("Selected key: %1").arg(fileName), "green");
+
+    if (fileName.contains(' ')) {
+        appendLog("ℹ️ Key path has spaces — a temp copy will be used when burning.", "yellow");
+    }
+
     updateFlashButton();
 }
 
@@ -1639,16 +1636,21 @@ void MainWindow::performEncryptionSetup()
     appendLog("⚠️ THIS IS IRREVERSIBLE!", "red");
     appendLog("========================================", "yellow");
 
-    // Step 1: Burn the key
+    // espefuse burn-key cannot handle paths with spaces
+    QString safeKeyPath = ensureNoSpacePath(selectedKeyPath);
+
     QStringList args;
     args << "--port" << portComboBox->currentText();
     args << "--do-not-confirm";
     args << "burn-key";
     args << "flash_encryption";
-    args << selectedKeyPath;
+    args << safeKeyPath;
 
     appendLog("Step 1/4: Burning encryption key to eFuses...", "yellow");
     appendLog("Key file: " + selectedKeyPath, "gray");
+    if (safeKeyPath != selectedKeyPath) {
+        appendLog("ℹ️ Using temp copy for burn: " + safeKeyPath, "gray");
+    }
     appendLog("⚠️ Using --do-not-confirm flag (operation is still irreversible!)", "yellow");
     updateStatus("Burning encryption key...");
     enableControls(false);
@@ -1656,13 +1658,14 @@ void MainWindow::performEncryptionSetup()
     encryptionSetupInProgress = true;
     encryptionStepIndex = 0;
     keyBurnSkipped = false;
+    handlingKeyBurned = false;
 
     progressBar->setVisible(true);
     progressBar->setRange(0, 4);
     progressBar->setValue(1);
 
     pendingEncryptionSteps.clear();
-    pendingEncryptionSteps << "burn_key" << "burn_config" << "burn_cnt" << "flash_encrypted";
+    pendingEncryptionSteps << "burn_key" << "burn_config" << "burn_cnt" << "encrypt_firmware";
 
     pendingModule = "espefuse";
     pendingArgs = args;
@@ -1688,6 +1691,7 @@ void MainWindow::handleEncryptionStepComplete()
         enableControls(true);
 
         cleanupEncryptedFile();
+        cleanupTempDirectory();
 
         QMessageBox::information(this, "Encryption Setup Complete",
                                  "Flash encryption has been configured successfully!\n\n"
@@ -1707,7 +1711,7 @@ void MainWindow::handleEncryptionStepComplete()
         args << "FLASH_CRYPT_CONFIG";
         args << "0xF";
 
-        appendLog("Step 2/5: Burning FLASH_CRYPT_CONFIG to 0xF...", "yellow");
+        appendLog("Step 2/4: Burning FLASH_CRYPT_CONFIG to 0xF...", "yellow");
         appendLog("⚠️ THIS IS IRREVERSIBLE!", "red");
         updateStatus("Configuring encryption...");
         progressBar->setValue(2);
@@ -1724,7 +1728,7 @@ void MainWindow::handleEncryptionStepComplete()
         args << "FLASH_CRYPT_CNT";
         args << "1";
 
-        appendLog("Step 3/5: Burning FLASH_CRYPT_CNT to 1 to enable encryption...", "yellow");
+        appendLog("Step 3/4: Burning FLASH_CRYPT_CNT to 1 to enable encryption...", "yellow");
         appendLog("⚠️ THIS IS THE FINAL IRREVERSIBLE STEP!", "red");
         updateStatus("Enabling encryption...");
         progressBar->setValue(3);
@@ -1734,72 +1738,73 @@ void MainWindow::handleEncryptionStepComplete()
         runModuleCommand("espefuse", args);
 
     } else if (step == "encrypt_firmware") {
-        appendLog("DEBUG: Skipping host-side encryption (chip will encrypt during flash)", "gray");
-        // ADD DELAY before next step
-        QTimer::singleShot(300, this, [this]() {
-            handleEncryptionStepComplete();
-        });
+        appendLog("Step 4/4: Encrypting bootloader + partition + firmware (host-side)...", "yellow");
+        updateStatus("Encrypting images...");
+        progressBar->setValue(4);
+
+        encryptFirmwareWithKey();
+        return;
 
     } else if (step == "flash_encrypted") {
-        if (selectedFirmwarePath.isEmpty() || !QFile::exists(selectedFirmwarePath)) {
-            appendLog("❌ No firmware file selected!", "red");
-            encryptionSetupInProgress = false;
-            isFlashing = false;
-            progressBar->setVisible(false);
-            enableControls(true);
-            return;
-        }
-
-        QStringList args;
-        args << "--chip" << "esp32";
-        args << "--port" << portComboBox->currentText();
-        args << "--baud" << QString::number(baudRateComboBox->currentData().toInt());
-        args << "--before" << "default-reset";
-        args << "--after" << "hard-reset";
-        args << "write-flash";
-        args << "--encrypt";
-        args << "-z";
-        args << "--flash-mode" << getFlashMode();
-        args << "--flash-freq" << getFlashFreq();
-        args << "--flash-size" << getFlashSize();
-
-        if (!selectedBootloaderPath.isEmpty()) {
-            args << QString::number(bootloaderOffsetSpin->value());
-            args << selectedBootloaderPath;
-            appendLog(QString("Adding bootloader at offset %1: %2")
-                          .arg(formatOffset(bootloaderOffsetSpin->value()),
-                               QFileInfo(selectedBootloaderPath).fileName()), "gray");
-        }
-
-        if (!selectedPartitionPath.isEmpty()) {
-            args << QString::number(partitionOffsetSpin->value());
-            args << selectedPartitionPath;
-            appendLog(QString("Adding partition table at offset %1: %2")
-                          .arg(formatOffset(partitionOffsetSpin->value()),
-                               QFileInfo(selectedPartitionPath).fileName()), "gray");
-        }
-
-        args << QString::number(firmwareOffsetSpin->value());
-        args << selectedFirmwarePath;
-
-        appendLog("Step 5/5: Flashing encrypted firmware...", "yellow");
-        appendLog("Firmware: " + selectedFirmwarePath, "gray");
-        appendLog("💡 Chip will encrypt firmware using BLOCK1 key during write", "green");
-        appendLog(QString("Flash mode: %1, Freq: %2, Size: %3")
-                      .arg(getFlashMode(), getFlashFreq(), getFlashSize()), "gray");
-        updateStatus("Flashing encrypted firmware...");
-        progressBar->setValue(5);
-
-        pendingModule = "esptool";
-        pendingArgs = args;
-        runModuleCommand("esptool", args);
+        appendLog("ℹ️ Legacy step 'flash_encrypted' reached — flashing directly.", "yellow");
+        flashEncryptedFirmwareDirectly();
+        return;
     }
+}
+
+QString MainWindow::getEncryptedFilePath(const QString &originalPath, const QString &suffix)
+{
+    QFileInfo fi(originalPath);
+    return fi.absolutePath() + "/" + fi.baseName() + suffix + "." + fi.suffix();
+}
+
+QString MainWindow::ensureNoSpacePath(const QString &originalPath)
+{
+    if (originalPath.isEmpty() || !originalPath.contains(' ')) {
+        return originalPath;
+    }
+
+    QString tempDir = QDir::tempPath() + "/esp32_flasher_tmp";
+    QDir().mkpath(tempDir);
+
+    QFileInfo fi(originalPath);
+    QString safeName = fi.fileName();
+    safeName.replace(' ', '_');
+    QString tempPath = tempDir + "/" + safeName;
+
+    if (QFile::exists(tempPath)) {
+        QFile::remove(tempPath);
+    }
+
+    if (!QFile::copy(originalPath, tempPath)) {
+        appendLog("⚠️ Failed to copy to temp path — falling back to original.", "yellow");
+        return originalPath;
+    }
+
+    QFile::setPermissions(tempPath,
+                          QFile::ReadOwner | QFile::WriteOwner | QFile::ReadUser | QFile::WriteUser);
+
+    appendLog(QString("ℹ️ Path contained spaces. Using temp copy: %1").arg(tempPath), "gray");
+    return tempPath;
 }
 
 void MainWindow::encryptFirmwareWithKey()
 {
-    if (selectedFirmwarePath.isEmpty() || !QFile::exists(selectedFirmwarePath)) {
-        appendLog("❌ No firmware selected for encryption!", "red");
+    encryptionFileQueue.clear();
+    encryptionFileIndex = 0;
+
+    if (!selectedBootloaderPath.isEmpty() && QFile::exists(selectedBootloaderPath)) {
+        encryptionFileQueue.append(qMakePair(selectedBootloaderPath, quint32(bootloaderOffsetSpin->value())));
+    }
+    if (!selectedPartitionPath.isEmpty() && QFile::exists(selectedPartitionPath)) {
+        encryptionFileQueue.append(qMakePair(selectedPartitionPath, quint32(partitionOffsetSpin->value())));
+    }
+    if (!selectedFirmwarePath.isEmpty() && QFile::exists(selectedFirmwarePath)) {
+        encryptionFileQueue.append(qMakePair(selectedFirmwarePath, quint32(firmwareOffsetSpin->value())));
+    }
+
+    if (encryptionFileQueue.isEmpty()) {
+        appendLog("❌ No files selected to encrypt!", "red");
         encryptionSetupInProgress = false;
         isFlashing = false;
         progressBar->setVisible(false);
@@ -1816,42 +1821,78 @@ void MainWindow::encryptFirmwareWithKey()
         return;
     }
 
-    encryptedFirmwarePath = getEncryptedFirmwarePath();
+    appendLog("========================================", "yellow");
+    appendLog("🔐 Host-side encryption of flash images", "yellow");
+    appendLog(QString("Encrypting %1 file(s) with key: %2")
+                  .arg(encryptionFileQueue.size())
+                  .arg(QFileInfo(selectedKeyPath).fileName()), "gray");
+    appendLog("========================================", "yellow");
 
-    appendLog("Step 4/5: Encrypting firmware with key (host-side)...", "yellow");
-    appendLog("Source: " + selectedFirmwarePath, "gray");
-    appendLog("Target: " + encryptedFirmwarePath, "gray");
-    appendLog("💡 This is for first-time encryption setup", "gray");
+    encryptedBootloaderPath.clear();
+    encryptedPartitionPath.clear();
+    encryptedFirmwarePath.clear();
+
+    progressBar->setVisible(true);
+    progressBar->setRange(0, encryptionFileQueue.size());
+    progressBar->setValue(0);
+
+    encryptNextFile();
+}
+
+void MainWindow::encryptNextFile()
+{
+    if (encryptionFileIndex >= encryptionFileQueue.size()) {
+        appendLog("✅ All files encrypted successfully!", "green");
+        appendLog("========================================", "green");
+        appendLog("🔐 Flashing encrypted images...", "green");
+        appendLog("========================================", "green");
+
+        progressBar->setValue(encryptionFileQueue.size());
+
+        QTimer::singleShot(300, this, [this]() {
+            flashEncryptedFirmwareDirectly();
+        });
+        return;
+    }
+
+    QPair<QString, quint32> entry = encryptionFileQueue[encryptionFileIndex];
+    QString sourcePath = entry.first;
+    quint32 address = entry.second;
+    QString targetPath = getEncryptedFilePath(sourcePath, "_encrypted");
+
+    appendLog(QString("Encrypting (%1/%2): %3")
+                  .arg(encryptionFileIndex + 1)
+                  .arg(encryptionFileQueue.size())
+                  .arg(QFileInfo(sourcePath).fileName()), "yellow");
+    appendLog(QString("   Address: %1  →  Output: %2")
+                  .arg(formatOffset(address), QFileInfo(targetPath).fileName()), "gray");
+
+    // Guard against paths with spaces for espsecure too
+    QString safeKeyPath = ensureNoSpacePath(selectedKeyPath);
+    QString safeSourcePath = ensureNoSpacePath(sourcePath);
+
+    QString safeTargetPath = targetPath;
+    if (safeTargetPath.contains(' ')) {
+        QFileInfo outFi(targetPath);
+        QString tempDir = QDir::tempPath() + "/esp32_flasher_tmp";
+        QDir().mkpath(tempDir);
+        safeTargetPath = tempDir + "/" + outFi.fileName();
+        safeTargetPath.replace(' ', '_');
+    }
 
     QStringList args;
     args << "encrypt-flash-data";
-    args << "--keyfile" << selectedKeyPath;
-    args << "--address" << QString::number(firmwareOffsetSpin->value());
-    args << "--output" << encryptedFirmwarePath;
-    args << selectedFirmwarePath;
+    args << "--keyfile" << safeKeyPath;
+    args << "--address" << QString::number(address);
+    args << "--output" << safeTargetPath;
+    args << safeSourcePath;
 
-    pendingModule = "espsecure";
+    pendingEncryptedOutputPath = safeTargetPath;
+    pendingEncryptedSourcePath = sourcePath;   // keep original for identity mapping
+
+    pendingModule = "espsecure_encrypt_file";
     pendingArgs = args;
     runModuleCommand("espsecure", args);
-}
-
-QString MainWindow::getEncryptedFirmwarePath()
-{
-    QFileInfo fi(selectedFirmwarePath);
-    QString basePath = fi.absolutePath();
-    QString baseName = fi.baseName();
-    QString extension = fi.suffix();
-
-    return basePath + "/" + baseName + "_encrypted." + extension;
-}
-
-void MainWindow::cleanupEncryptedFile()
-{
-    if (!encryptedFirmwarePath.isEmpty() && QFile::exists(encryptedFirmwarePath)) {
-        QFile::remove(encryptedFirmwarePath);
-        appendLog("Cleaned up encrypted firmware file.", "gray");
-        encryptedFirmwarePath.clear();
-    }
 }
 
 void MainWindow::checkAndHandleKeyBurned()
@@ -1865,8 +1906,8 @@ void MainWindow::checkAndHandleKeyBurned()
         "This will:\n"
         "1. Burn FLASH_CRYPT_CONFIG to 0xF\n"
         "2. Burn FLASH_CRYPT_CNT to 1\n"
-        "3. Encrypt your firmware\n"
-        "4. Flash the encrypted firmware\n\n"
+        "3. Encrypt your bootloader, partition table, and firmware (host-side)\n"
+        "4. Flash the encrypted images\n\n"
         "⚠️ This is still IRREVERSIBLE!\n\n"
         "Proceed?",
         QMessageBox::Yes | QMessageBox::No
@@ -1875,7 +1916,7 @@ void MainWindow::checkAndHandleKeyBurned()
     if (reply == QMessageBox::Yes) {
         keyBurnSkipped = true;
         pendingEncryptionSteps.removeAll("burn_key");
-        encryptionStepIndex = 0;
+        encryptionStepIndex = -1;   // so ++ lands on index 0
         appendLog("DEBUG: After removing burn_key, steps remaining: " + pendingEncryptionSteps.join(", "), "gray");
         handleEncryptionStepComplete();
     } else {
@@ -1895,10 +1936,10 @@ void MainWindow::flashWithEncryption()
     appendLog("========================================", "green");
 
     if (isEncryptionConfigured) {
-        appendLog("ℹ️ Chip is already encrypted. Using hardware encryption...", "gray");
-        flashEncryptedFirmwareDirectly();
+        appendLog("ℹ️ Encryption is configured. Encrypting images with key...", "gray");
+        encryptFirmwareWithKey();
     } else {
-        appendLog("ℹ️ First-time encryption setup. Running 5-step process...", "gray");
+        appendLog("ℹ️ First-time encryption setup. Running 4-step process...", "gray");
         performEncryptionSetup();
     }
 }
@@ -1906,16 +1947,12 @@ void MainWindow::flashWithEncryption()
 void MainWindow::flashEncryptedFirmwareDirectly()
 {
     appendLog("========================================", "green");
-    appendLog("🔐 Flashing Encrypted Firmware (Hardware Encryption)", "green");
+    appendLog("🔐 Flashing Encrypted Firmware", "green");
     appendLog("========================================", "green");
-
-    appendLog("💡 Using chip's BLOCK1 key for encryption (no host-side encryption needed)", "gray");
-    appendLog("💡 This is the modern, faster workflow for already-encrypted chips", "gray");
 
     appendLog("🔄 Resetting ESP32...", "gray");
     resetESP32();
 
-    // Reset retry count for this flash attempt
     flashRetryCount = 0;
 
     QStringList args;
@@ -1925,41 +1962,53 @@ void MainWindow::flashEncryptedFirmwareDirectly()
     args << "--before" << "default-reset";
     args << "--after" << "hard-reset";
     args << "write-flash";
-    args << "--encrypt";
     args << "-z";
     args << "--flash-mode" << getFlashMode();
     args << "--flash-freq" << getFlashFreq();
     args << "--flash-size" << getFlashSize();
 
+    auto pickPath = [this](const QString &encryptedPath,
+                           const QString &originalPath) -> QString {
+        QString p = (!encryptedPath.isEmpty() && QFile::exists(encryptedPath))
+        ? encryptedPath
+        : originalPath;
+        if (p.isEmpty()) return p;
+        return ensureNoSpacePath(p);
+    };
+
     if (!selectedBootloaderPath.isEmpty()) {
+        QString flashPath = pickPath(encryptedBootloaderPath, selectedBootloaderPath);
         args << QString::number(bootloaderOffsetSpin->value());
-        args << selectedBootloaderPath;
-        appendLog(QString("Adding bootloader at offset %1: %2 (will be encrypted by chip)")
+        args << flashPath;
+        appendLog(QString("Adding bootloader at %1: %2")
                       .arg(formatOffset(bootloaderOffsetSpin->value()),
-                           QFileInfo(selectedBootloaderPath).fileName()), "gray");
+                           QFileInfo(flashPath).fileName()),
+                  encryptedBootloaderPath.isEmpty() ? "yellow" : "green");
     }
 
     if (!selectedPartitionPath.isEmpty()) {
+        QString flashPath = pickPath(encryptedPartitionPath, selectedPartitionPath);
         args << QString::number(partitionOffsetSpin->value());
-        args << selectedPartitionPath;
-        appendLog(QString("Adding partition table at offset %1: %2 (will be encrypted by chip)")
+        args << flashPath;
+        appendLog(QString("Adding partition table at %1: %2")
                       .arg(formatOffset(partitionOffsetSpin->value()),
-                           QFileInfo(selectedPartitionPath).fileName()), "gray");
+                           QFileInfo(flashPath).fileName()),
+                  encryptedPartitionPath.isEmpty() ? "yellow" : "green");
     }
 
     if (!selectedFirmwarePath.isEmpty()) {
+        QString flashPath = pickPath(encryptedFirmwarePath, selectedFirmwarePath);
         args << QString::number(firmwareOffsetSpin->value());
-        args << selectedFirmwarePath;
-        appendLog(QString("Adding firmware at offset %1: %2 (will be encrypted by chip using BLOCK1 key)")
+        args << flashPath;
+        appendLog(QString("Adding firmware at %1: %2")
                       .arg(formatOffset(firmwareOffsetSpin->value()),
-                           QFileInfo(selectedFirmwarePath).fileName()), "gray");
+                           QFileInfo(flashPath).fileName()),
+                  encryptedFirmwarePath.isEmpty() ? "yellow" : "green");
     }
 
     appendLog(QString("Starting encrypted flash on port %1 at %2 baud...")
                   .arg(portComboBox->currentText())
-                  .arg(baudRateComboBox->currentText()));
-    appendLog("🔑 Chip will encrypt ALL data using the key in BLOCK1", "green");
-    appendLog("💡 No key file needed - the key is already in the chip's eFuse", "gray");
+                  .arg(baudRateComboBox->currentText()), "gray");
     appendLog(QString("Flash mode: %1, Freq: %2, Size: %3")
                   .arg(getFlashMode(), getFlashFreq(), getFlashSize()), "gray");
     updateStatus("Flashing with hardware encryption...");
@@ -1969,6 +2018,8 @@ void MainWindow::flashEncryptedFirmwareDirectly()
 
     progressBar->setVisible(true);
     progressBar->setRange(0, 0);
+
+    flashingEncryptedImages = true;
 
     pendingModule = "esptool";
     pendingArgs = args;
@@ -2021,27 +2072,30 @@ void MainWindow::flashWithoutEncryption()
     args << "--flash-size" << getFlashSize();
 
     if (!selectedBootloaderPath.isEmpty()) {
+        QString p = ensureNoSpacePath(selectedBootloaderPath);
         args << QString::number(bootloaderOffsetSpin->value());
-        args << selectedBootloaderPath;
+        args << p;
         appendLog(QString("Adding bootloader at offset %1: %2")
                       .arg(formatOffset(bootloaderOffsetSpin->value()),
-                           QFileInfo(selectedBootloaderPath).fileName()), "gray");
+                           QFileInfo(p).fileName()), "gray");
     }
 
     if (!selectedPartitionPath.isEmpty()) {
+        QString p = ensureNoSpacePath(selectedPartitionPath);
         args << QString::number(partitionOffsetSpin->value());
-        args << selectedPartitionPath;
+        args << p;
         appendLog(QString("Adding partition table at offset %1: %2")
                       .arg(formatOffset(partitionOffsetSpin->value()),
-                           QFileInfo(selectedPartitionPath).fileName()), "gray");
+                           QFileInfo(p).fileName()), "gray");
     }
 
     if (!selectedFirmwarePath.isEmpty()) {
+        QString p = ensureNoSpacePath(selectedFirmwarePath);
         args << QString::number(firmwareOffsetSpin->value());
-        args << selectedFirmwarePath;
+        args << p;
         appendLog(QString("Adding firmware at offset %1: %2")
                       .arg(formatOffset(firmwareOffsetSpin->value()),
-                           QFileInfo(selectedFirmwarePath).fileName()), "gray");
+                           QFileInfo(p).fileName()), "gray");
     }
 
     appendLog(QString("Starting flash on port %1 at %2 baud...")
@@ -2056,6 +2110,8 @@ void MainWindow::flashWithoutEncryption()
 
     progressBar->setVisible(true);
     progressBar->setRange(0, 0);
+
+    flashingEncryptedImages = false;
 
     pendingModule = "esptool";
     pendingArgs = args;
@@ -2078,6 +2134,8 @@ void MainWindow::resetESP32()
     QProcess *resetProcess = new QProcess(this);
     connect(resetProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             [resetProcess](int exitCode, QProcess::ExitStatus exitStatus) {
+                Q_UNUSED(exitCode);
+                Q_UNUSED(exitStatus);
                 resetProcess->deleteLater();
             });
 
@@ -2155,6 +2213,8 @@ void MainWindow::onEraseFlash()
     isFlashing = true;
     progressBar->setVisible(true);
     progressBar->setRange(0, 0);
+
+    flashingEncryptedImages = false;
 
     pendingModule = "esptool";
     pendingArgs = args;
@@ -2342,6 +2402,7 @@ void MainWindow::onPortDetected(const SimplePortInfo &port)
 
     updateFlashButton();
 }
+
 void MainWindow::onPortRemoved(const QString &portName)
 {
     int index = portComboBox->findText(portName);
@@ -2373,6 +2434,22 @@ void MainWindow::onPortRemoved(const QString &portName)
 
 void MainWindow::checkEncryptionStatus()
 {
+    // intentionally empty - encryption is checked via the command queue
+}
+
+QString MainWindow::sanitizeEspOutput(const QString &raw)
+{
+    QString out = raw;
+
+    static const QRegularExpression ansiRegex(
+        QStringLiteral("\\x1B\\[[0-9;?]*[ -/]*[@-~]"));
+    out.remove(ansiRegex);
+
+    out.replace(QRegularExpression(QStringLiteral("\\r(?!\\n)")),
+                QStringLiteral("\n"));
+    out.replace("\r\n", "\n");
+
+    return out;
 }
 
 void MainWindow::onProcessOutput()
@@ -2380,7 +2457,7 @@ void MainWindow::onProcessOutput()
     if (!esptoolProcess) return;
 
     QByteArray data = esptoolProcess->readAllStandardOutput();
-    QString chunk = QString::fromUtf8(data);
+    QString chunk = sanitizeEspOutput(QString::fromUtf8(data));
     processOutputBuffer += chunk;
 
     if (pendingModule == "esptool_flashid") {
@@ -2415,13 +2492,23 @@ void MainWindow::onProcessError()
     if (!esptoolProcess) return;
 
     QByteArray data = esptoolProcess->readAllStandardError();
-    QString error = QString::fromUtf8(data);
+    QString error = sanitizeEspOutput(QString::fromUtf8(data));
     appendLog("Error: " + error, "red");
 
-    if (error.contains("BLOCK1 is read-protected", Qt::CaseInsensitive)) {
-        if (encryptionSetupInProgress && pendingModule == "espefuse" && pendingArgs.contains("burn-key")) {
-            appendLog("ℹ️ Key is already burned in BLOCK1. Skipping key burning...", "yellow");
-            checkAndHandleKeyBurned();
+    bool keyAlreadyBurned =
+        error.contains("BLOCK1 is read-protected", Qt::CaseInsensitive) ||
+        error.contains("already burned", Qt::CaseInsensitive) ||
+        (error.contains("BLOCK1", Qt::CaseInsensitive) &&
+         error.contains("read-protected", Qt::CaseInsensitive));
+
+    if (keyAlreadyBurned) {
+        if (encryptionSetupInProgress &&
+            pendingModule == "espefuse" &&
+            pendingArgs.contains("burn-key")) {
+            if (!handlingKeyBurned) {
+                handlingKeyBurned = true;
+                appendLog("ℹ️ Key appears to be already burned in BLOCK1. Will handle after process exits.", "yellow");
+            }
         } else {
             QMessageBox::information(this, "Key Already Burned",
                                      "BLOCK1 is read-protected, which means a flash encryption key has already been burned.\n\n"
@@ -2432,7 +2519,6 @@ void MainWindow::onProcessError()
     }
 
     if (error.contains("Deprecated", Qt::CaseInsensitive)) {
-        appendLog("ℹ️ " + error.trimmed(), "yellow");
         return;
     }
 
@@ -2446,9 +2532,9 @@ void MainWindow::onProcessError()
     }
 }
 
-
 void MainWindow::updateProgress()
 {
+    // intentionally empty
 }
 
 void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus)
@@ -2460,10 +2546,20 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
     bool wasFlashId = (pendingModule == "esptool_flashid");
     bool wasErase = (pendingModule == "esptool" && pendingArgs.contains("erase-flash"));
     bool wasKeyBurn = (pendingModule == "espefuse" && pendingArgs.contains("burn-key"));
-    bool wasKeyGen = (pendingModule == "espsecure" && pendingArgs.contains("generate-flash-encryption-key"));
-    bool wasEncrypt = (pendingModule == "espsecure" && pendingArgs.contains("encrypt-flash-data"));
-    bool wasFlashEncrypted = (pendingModule == "esptool" && !pendingArgs.contains("erase-flash") && !pendingArgs.contains("flash-id") && pendingArgs.contains(encryptedFirmwarePath));
-    bool wasNormalFlash = (pendingModule == "esptool" && !pendingArgs.contains("erase-flash") && !pendingArgs.contains("flash-id") && !pendingArgs.contains(encryptedFirmwarePath) && pendingArgs.contains("write-flash"));
+    bool wasKeyGen = (pendingModule == "espsecure" &&
+                      (pendingArgs.contains("generate-flash-encryption-key") ||
+                       pendingArgs.contains("generate_flash_encryption_key")));
+    bool wasEncryptFile = (pendingModule == "espsecure_encrypt_file");
+
+    bool wasFlashEncrypted = (pendingModule == "esptool" && flashingEncryptedImages);
+    flashingEncryptedImages = false;
+
+    bool wasNormalFlash = (pendingModule == "esptool" &&
+                           !pendingArgs.contains("erase-flash") &&
+                           !pendingArgs.contains("flash-id") &&
+                           !wasFlashEncrypted &&
+                           pendingArgs.contains("write-flash"));
+
     bool wasFuseBurn = (pendingModule == "espefuse" && pendingArgs.contains("burn-efuse") &&
                         (pendingArgs.contains("UART_DOWNLOAD_DIS") ||
                          pendingArgs.contains("JTAG_DISABLE") ||
@@ -2473,30 +2569,24 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                          pendingArgs.contains("CONSOLE_DEBUG_DISABLE")));
     bool wasFailedFlash = (pendingModule == "esptool" && pendingArgs.contains("write-flash") && !success);
 
-    // Handle pre-flash encryption check
     bool wasPreFlashCheck = wasEncryptionCheck &&
                             pendingEncryptionSteps.contains("pre_flash_check");
 
-    if(wasPreFlashCheck)
-    {
-        if(!encryptFlashCheckBox->isChecked())
-        {
+    // ===== Pre-flash encryption check =====
+    if (wasPreFlashCheck) {
+        if (!encryptFlashCheckBox->isChecked()) {
             flashWithoutEncryption();
             return;
-        }
-        else
-        {
+        } else {
             pendingEncryptionSteps.removeAll("pre_flash_check");
             isFirstEncryptionCheck = false;
 
-            // Check if encryption is configured
             if (isEncryptionConfigured) {
-                appendLog("✅ Encryption is configured. Proceeding with encrypted flash.", "green");
+                appendLog("✅ Encryption is configured. Encrypting images then flashing.", "green");
                 QTimer::singleShot(300, this, [this]() {
                     flashWithEncryption();
                 });
             } else {
-                // Show the encryption setup warning dialog
                 appendLog("ℹ️ Encryption is not configured. Showing setup warning...", "yellow");
 
                 QMessageBox::StandardButton reply = QMessageBox::question(
@@ -2507,8 +2597,8 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                     "1. Burn encryption key to eFuses (IRREVERSIBLE!)\n"
                     "2. Burn FLASH_CRYPT_CONFIG to 0xF (IRREVERSIBLE!)\n"
                     "3. Burn FLASH_CRYPT_CNT to 1 (IRREVERSIBLE!)\n"
-                    "4. Flash your firmware with encryption\n"
-                    "   (The chip encrypts the firmware during write using the burned key)\n\n"
+                    "4. Encrypt bootloader + partition + firmware on host,\n"
+                    "   then flash the encrypted images\n\n"
                     "⚠️ WARNING: Steps 1-3 are a ONE-TIME operation!\n"
                     "After burning, encryption is PERMANENT and cannot be undone.\n\n"
                     "Keep your key file safe - losing it will brick the device!\n\n"
@@ -2519,28 +2609,60 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                 if (reply == QMessageBox::Yes) {
                     performEncryptionSetup();
                 }
-                // If user says No, just return - nothing else to do
             }
 
-            if (esptoolProcess) {
-                esptoolProcess->deleteLater();
-                esptoolProcess = nullptr;
-            }
             return;
         }
     }
 
-    // Handle failed flash with retry
+    // ===== Per-file host-side encryption =====
+    if (wasEncryptFile) {
+        if (success) {
+            if (pendingEncryptedSourcePath == selectedBootloaderPath) {
+                encryptedBootloaderPath = pendingEncryptedOutputPath;
+                appendLog("✅ Bootloader encrypted: " + QFileInfo(encryptedBootloaderPath).fileName(), "green");
+            } else if (pendingEncryptedSourcePath == selectedPartitionPath) {
+                encryptedPartitionPath = pendingEncryptedOutputPath;
+                appendLog("✅ Partition table encrypted: " + QFileInfo(encryptedPartitionPath).fileName(), "green");
+            } else if (pendingEncryptedSourcePath == selectedFirmwarePath) {
+                encryptedFirmwarePath = pendingEncryptedOutputPath;
+                appendLog("✅ Firmware encrypted: " + QFileInfo(encryptedFirmwarePath).fileName(), "green");
+            } else {
+                appendLog("⚠️ Encrypted output does not match any known source — assuming firmware.", "yellow");
+                encryptedFirmwarePath = pendingEncryptedOutputPath;
+            }
+
+            encryptionFileIndex++;
+            progressBar->setValue(encryptionFileIndex);
+
+            QTimer::singleShot(200, this, [this]() {
+                encryptNextFile();
+            });
+            return;
+        } else {
+            appendLog("❌ Failed to encrypt: " + QFileInfo(pendingEncryptedSourcePath).fileName(), "red");
+            encryptionSetupInProgress = false;
+            isFlashing = false;
+            progressBar->setVisible(false);
+            cleanupEncryptedFile();
+            cleanupTempDirectory();
+            enableControls(true);
+
+            QMessageBox::critical(this, "Encryption Failed",
+                                  "Failed to encrypt one of the selected images.\n\n"
+                                  "Check that the key file is a valid 32-byte flash encryption key.");
+
+            return;
+        }
+    }
+
+    // ===== Failed flash with retry =====
     if (wasFailedFlash && flashRetryCount < MAX_FLASH_RETRIES) {
         flashRetryCount++;
         appendLog(QString("⚠️ Flash failed (attempt %1 of %3). Retrying in 2 seconds...")
                       .arg(flashRetryCount).arg(MAX_FLASH_RETRIES), "yellow");
         appendLog("💡 Make sure the port is not being used by another application (serial monitor, etc.)", "gray");
 
-        if (esptoolProcess) {
-            esptoolProcess->deleteLater();
-            esptoolProcess = nullptr;
-        }
 
         QTimer::singleShot(2000, this, [this]() {
             if (isEncryptionConfigured) {
@@ -2554,7 +2676,7 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
         return;
     }
 
-    // Handle key generation
+    // ===== Key generation =====
     if (wasKeyGen && success) {
         appendLog("✅ Key generated successfully!", "green");
         if (!pendingKeyPath.isEmpty() && QFile::exists(pendingKeyPath)) {
@@ -2569,44 +2691,11 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
             selectedKeyPath.clear();
         }
 
-        if (esptoolProcess) {
-            esptoolProcess->deleteLater();
-            esptoolProcess = nullptr;
-        }
         enableControls(true);
         return;
     }
 
-    // Handle firmware encryption (host-side)
-    if (wasEncrypt && success) {
-        appendLog("✅ Firmware encrypted successfully!", "green");
-
-        if (isEncryptionConfigured) {
-            appendLog("ℹ️ Encryption is already configured. Flashing encrypted firmware directly...", "gray");
-            QTimer::singleShot(500, this, [this]() {
-                flashEncryptedFirmwareDirectly();
-            });
-            pendingModule.clear();
-            pendingArgs.clear();
-            return;
-        }
-
-        if (!encryptionSetupInProgress) {
-            encryptionSetupInProgress = true;
-        }
-
-        if (pendingEncryptionSteps.isEmpty()) {
-            pendingEncryptionSteps << "burn_config" << "burn_cnt" << "encrypt_firmware" << "flash_encrypted";
-            encryptionStepIndex = 0;
-        }
-
-        handleEncryptionStepComplete();
-        pendingModule.clear();
-        pendingArgs.clear();
-        return;
-    }
-
-    // Handle encryption setup steps
+    // ===== Encryption setup in progress =====
     if (encryptionSetupInProgress) {
         if (success) {
             if (wasFlashEncrypted) {
@@ -2618,25 +2707,54 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                 isFlashing = false;
                 progressBar->setVisible(false);
                 cleanupEncryptedFile();
+                cleanupTempDirectory();
                 flashRetryCount = 0;
 
-                appendLog("🔄 First-time encryption setup complete!", "green");
+                appendLog("🔄 Encryption setup complete!", "green");
                 appendLog("⚠️ IMPORTANT: Keep your key file safe! You'll need it for future flashes.", "yellow");
-
-                QTimer::singleShot(500, this, [this]() {
-                    resetESP32();
-                    appendLog("✅ Reset complete. ESP32 should boot normally.", "green");
-                });
-
-                QMessageBox::information(this, "Encryption Setup Complete",
-                                         "Flash encryption has been configured successfully!\n\n"
-                                         "The encrypted firmware has been flashed.\n\n"
-                                         "⚠️ IMPORTANT: Keep your key file safe!\n"
-                                         "If you lose the key, the device will be permanently bricked.");
 
                 pendingModule.clear();
                 pendingArgs.clear();
-                enableControls(true);
+
+                // Reset the chip first, then optionally burn fuses, THEN show success dialog.
+                QTimer::singleShot(500, this, [this]() {
+                    resetESP32();
+                    appendLog("✅ Reset complete. ESP32 should boot normally.", "green");
+
+                    // Check if any security fuses were selected alongside encryption
+                    bool anyFusesSelected =
+                        uartDownloadDisCheckBox->isChecked() ||
+                        jtagDisableCheckBox->isChecked() ||
+                        disableDlEncryptCheckBox->isChecked() ||
+                        disableDlDecryptCheckBox->isChecked() ||
+                        disableCacheCheckBox->isChecked() ||
+                        consoleDebugDisableCheckBox->isChecked();
+
+                    if (anyFusesSelected) {
+                        appendLog("========================================", "yellow");
+                        appendLog("🔥 Proceeding to burn selected security fuses...", "yellow");
+                        appendLog("========================================", "yellow");
+
+                        // Mark that we should show the success dialog after fuse burning completes
+                        pendingEncryptionSuccessDialog = true;
+
+                        // burnSecurityFuses() will run its own pre-checks (it usually
+                        // needs the user to confirm, but the confirmations already
+                        // happened via the checkbox selection flow).
+                        burnSecurityFuses();
+                    } else {
+                        // No fuses selected — show the dialog right away
+                        QMessageBox::information(this, "Encryption Setup Complete",
+                                                 "Flash encryption has been configured successfully!\n\n"
+                                                 "The encrypted bootloader, partition table and firmware\n"
+                                                 "have been flashed.\n\n"
+                                                 "⚠️ IMPORTANT: Keep your key file safe!\n"
+                                                 "If you lose the key, the device will be permanently bricked.");
+
+                        enableControls(true);
+                    }
+                });
+
                 return;
             } else {
                 QTimer::singleShot(300, this, [this]() {
@@ -2645,18 +2763,19 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                 return;
             }
         } else {
-            // Handle encryption setup failure
             if (wasKeyBurn) {
+                handlingKeyBurned = false;
                 if (!keyBurnSkipped) {
                     appendLog("❌ Key burning failed. Checking if key is already burned...", "yellow");
                     checkAndHandleKeyBurned();
                 } else {
-                    appendLog("❌ Encryption setup failed!", "red");
+                    appendLog("❌ Encryption setup failed (key burn step)!", "red");
                     encryptionSetupInProgress = false;
                     isFlashing = false;
                     isCheckingEncryption = false;
                     progressBar->setVisible(false);
                     cleanupEncryptedFile();
+                    cleanupTempDirectory();
                     flashRetryCount = 0;
 
                     QMessageBox::critical(this, "Encryption Setup Failed",
@@ -2664,12 +2783,13 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                                           "Check the log for details.");
                     enableControls(true);
                 }
-            } else if (wasEncrypt) {
+            } else if (wasEncryptFile) {
                 appendLog("❌ Firmware encryption failed!", "red");
                 encryptionSetupInProgress = false;
                 isFlashing = false;
                 progressBar->setVisible(false);
                 cleanupEncryptedFile();
+                cleanupTempDirectory();
                 flashRetryCount = 0;
 
                 QMessageBox::critical(this, "Encryption Failed",
@@ -2682,6 +2802,7 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                 isFlashing = false;
                 progressBar->setVisible(false);
                 cleanupEncryptedFile();
+                cleanupTempDirectory();
                 flashRetryCount = 0;
 
                 QMessageBox::critical(this, "Flash Failed",
@@ -2695,6 +2816,7 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                 isCheckingEncryption = false;
                 progressBar->setVisible(false);
                 cleanupEncryptedFile();
+                cleanupTempDirectory();
                 flashRetryCount = 0;
 
                 QMessageBox::critical(this, "Encryption Setup Failed",
@@ -2706,15 +2828,10 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                 enableControls(true);
             }
         }
-
-        if (esptoolProcess) {
-            esptoolProcess->deleteLater();
-            esptoolProcess = nullptr;
-        }
         return;
     }
 
-    // Handle fuse burning
+    // ===== Fuse burning =====
     if (isBurningFuses && wasFuseBurn) {
         if (success) {
             QString fuseName = pendingArgs[pendingArgs.size() - 1];
@@ -2733,15 +2850,10 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                                   "Failed to burn the selected fuse.\n\n"
                                   "Check the log for details.");
         }
-
-        if (esptoolProcess) {
-            esptoolProcess->deleteLater();
-            esptoolProcess = nullptr;
-        }
         return;
     }
 
-    // Handle regular operations completion
+    // ===== Regular operations completion =====
     progressBar->setVisible(false);
     isFlashing = false;
     pendingModule.clear();
@@ -2767,17 +2879,21 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
             }
         }
 
-        if (wasNormalFlash) {
-
+        if (wasNormalFlash || wasFlashEncrypted) {
             flashRetryCount = 0;
 
             if (isEncryptionConfigured) {
                 appendLog("ℹ️ Flash completed.", "gray");
 
+                if (wasFlashEncrypted) {
+                    cleanupEncryptedFile();
+                    cleanupTempDirectory();
+                }
+
                 QTimer::singleShot(500, this, [this]() {
                     if (uartDownloadDisCheckBox->isChecked() ||
-                        (jtagDisableCheckBox->isChecked() ||
-                         disableDlEncryptCheckBox->isChecked()) ||
+                        jtagDisableCheckBox->isChecked() ||
+                        disableDlEncryptCheckBox->isChecked() ||
                         disableDlDecryptCheckBox->isChecked() ||
                         disableCacheCheckBox->isChecked() ||
                         consoleDebugDisableCheckBox->isChecked()) {
@@ -2785,7 +2901,6 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
                         burnSecurityFuses();
                     }
                 });
-
             }
         }
 
@@ -2807,12 +2922,6 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
         }
     }
 
-    if (esptoolProcess) {
-        esptoolProcess->deleteLater();
-        esptoolProcess = nullptr;
-    }
-
-    // Continue command queue if running
     if (commandQueueRunning && (wasFlashId || wasEncryptionCheck)) {
         QTimer::singleShot(500, this, &MainWindow::executeNextCommand);
     } else {
@@ -2823,25 +2932,35 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
 void MainWindow::appendLog(const QString &message, const QString &color)
 {
     QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss");
-    QString formattedMessage;
+    QString colorHex;
 
     if (color == "red") {
-        formattedMessage = QString("<span style='color: #ff6b6b;'>[%1] %2</span>")
-        .arg(timestamp, message);
+        colorHex = "#ff6b6b";
     } else if (color == "green") {
-        formattedMessage = QString("<span style='color: #51cf66;'>[%1] %2</span>")
-        .arg(timestamp, message);
+        colorHex = "#51cf66";
     } else if (color == "yellow") {
-        formattedMessage = QString("<span style='color: #ffd43b;'>[%1] %2</span>")
-        .arg(timestamp, message);
+        colorHex = "#ffd43b";
     } else if (color == "gray") {
-        formattedMessage = QString("<span style='color: #868e96;'>[%1] %2</span>")
-        .arg(timestamp, message);
+        colorHex = "#868e96";
     } else {
-        formattedMessage = QString("[%1] %2").arg(timestamp, message);
+        colorHex = "#d4d4d4";
     }
 
-    logTextEdit->append(formattedMessage);
+    QTextCursor cursor = logTextEdit->textCursor();
+    cursor.movePosition(QTextCursor::End);
+
+    QString prefixHtml = QString("<span style='color: %1;'>[%2] </span>")
+                             .arg(colorHex, timestamp.toHtmlEscaped());
+    cursor.insertHtml(prefixHtml);
+
+    QTextCharFormat fmt;
+    fmt.setForeground(QColor(colorHex));
+    cursor.setCharFormat(fmt);
+    cursor.insertText(message);
+
+    cursor.insertBlock();
+
+    logTextEdit->setTextCursor(cursor);
     logTextEdit->verticalScrollBar()->setValue(
         logTextEdit->verticalScrollBar()->maximum()
         );
@@ -2858,6 +2977,7 @@ void MainWindow::runModuleCommand(const QString &module, const QStringList &args
                 esptoolProcess->waitForFinished(1000);
             }
         }
+
         esptoolProcess->deleteLater();
         esptoolProcess = nullptr;
     }
@@ -2888,12 +3008,12 @@ void MainWindow::runModuleCommand(const QString &module, const QStringList &args
     QStringList fullArgs;
     fullArgs << "-m" << module << args;
 
-    if (module != "espefuse" || !args.contains("summary") || (pendingModule != "espefuse_summary" && pendingModule != "espefuse_status")) {
+    if (module != "espefuse" || !args.contains("summary") ||
+        (pendingModule != "espefuse_summary" && pendingModule != "espefuse_status")) {
         appendLog("Running: " + python + " " + fullArgs.join(" "), "gray");
     }
 
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    // Add Python path to environment if needed
     esptoolProcess->setProcessEnvironment(env);
     esptoolProcess->start(python, fullArgs);
 
@@ -2908,11 +3028,6 @@ void MainWindow::runModuleCommand(const QString &module, const QStringList &args
         isFlashing = false;
         isCheckingEncryption = false;
         progressBar->setVisible(false);
-
-        if (esptoolProcess) {
-            esptoolProcess->deleteLater();
-            esptoolProcess = nullptr;
-        }
     }
 }
 
@@ -2985,4 +3100,52 @@ void MainWindow::enableControls(bool enable)
     disableDlDecryptCheckBox->setEnabled(enable);
     disableCacheCheckBox->setEnabled(enable);
     consoleDebugDisableCheckBox->setEnabled(enable);
+}
+
+void MainWindow::cleanupEncryptedFile()
+{
+    auto removeIfExists = [this](QString &path) {
+        if (!path.isEmpty() && QFile::exists(path)) {
+            QFile::setPermissions(path,
+                                  QFile::ReadOwner | QFile::WriteOwner | QFile::ReadUser | QFile::WriteUser);
+            if (QFile::remove(path)) {
+                appendLog("Cleaned up: " + QFileInfo(path).fileName(), "gray");
+            }
+        }
+        path.clear();
+    };
+
+    removeIfExists(encryptedFirmwarePath);
+    removeIfExists(encryptedBootloaderPath);
+    removeIfExists(encryptedPartitionPath);
+}
+
+void MainWindow::cleanupTempDirectory()
+{
+    QString tempDir = QDir::tempPath() + "/esp32_flasher_tmp";
+    QDir dir(tempDir);
+    if (!dir.exists()) {
+        return;
+    }
+
+    const QStringList entries = dir.entryList(QDir::Files | QDir::Hidden | QDir::System);
+    int removed = 0;
+    for (const QString &name : entries) {
+        QString fullPath = dir.absoluteFilePath(name);
+        QFile::setPermissions(fullPath,
+                              QFile::ReadOwner | QFile::WriteOwner | QFile::ReadUser | QFile::WriteUser);
+        if (QFile::remove(fullPath)) {
+            removed++;
+        } else {
+            qWarning() << "Failed to remove temp file:" << fullPath;
+        }
+    }
+
+    if (dir.rmdir(tempDir)) {
+        if (removed > 0) {
+            appendLog(QString("🧹 Cleaned up %1 temp file(s)").arg(removed), "gray");
+        }
+    } else if (removed > 0) {
+        appendLog(QString("🧹 Removed %1 temp file(s); directory not empty").arg(removed), "gray");
+    }
 }
