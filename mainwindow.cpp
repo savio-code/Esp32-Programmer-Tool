@@ -2906,6 +2906,7 @@ void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus
 
         if (wasFuseStatus) {
             appendLog("✅ Fuse status updated", "gray");
+            resetESP32();
         }
 
         eraseFlashBtn->setEnabled(true);
